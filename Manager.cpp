@@ -14,7 +14,14 @@ int async_response(int operation, struct snmp_session *sp, int reqid,struct snmp
     Host* h = static_cast<Host*>(magic);
     if(pManager)
     {
-        pManager->handle_data(h,pdu);
+        if (operation == NETSNMP_CALLBACK_OP_RECEIVED_MESSAGE) 
+        {
+           pManager->handle_data(STAT_SUCCESS,h,pdu);
+        }
+        else
+        {
+           pManager->handle_data(STAT_TIMEOUT,h,pdu);
+        }
     }
     else
     {
@@ -43,10 +50,10 @@ void Manager::add_host(Host* h)
     m_hosts.push_back(h);
 }
 
-void Manager::handle_data(Host* h, snmp_pdu* p)
+void Manager::handle_data(int status, Host* h, snmp_pdu* p)
 {
     --m_sendCount;
-    m_handleFunc(*h, p);
+    m_handleFunc(status, *h, p);
 }
 
 void Manager::set_interval(uint32_t i)
@@ -64,12 +71,56 @@ void Manager::init_sessions()
 
         snmp_sess_init(&session);
         session.peername = const_cast<char*>(h->ip.c_str());
-        session.retries = 2;
-        session.timeout = 10000000;
+        session.retries = 1;
+        session.timeout = (long)(5 * 1000000L);;
         session.remote_port = 161;
-        session.version = SNMP_VERSION_2c;
-        session.community = (u_char*)strdup("public");
-        session.community_len = strlen("public");
+        
+        //session.version = SNMP_VERSION_2c;
+        //session.community = (u_char*)strdup("public");
+        //session.community_len = strlen("public");
+
+        //snmpwalk -v 3 -a MD5 -A testUserA -x DES -X testUserX -l authPriv -u user localhost system
+
+        
+        session.version = SNMP_VERSION_3;
+        session.securityName = strdup("user");
+        session.securityNameLen = strlen(session.securityName);
+
+        const char *auth_v3_passphrase = "testUserA";
+        const char *priv_v3_passphrase = "testUserX";
+
+
+        session.securityLevel = SNMP_SEC_LEVEL_AUTHPRIV;
+
+        session.securityAuthProto = usmHMACMD5AuthProtocol;
+        session.securityAuthProtoLen = USM_AUTH_PROTO_MD5_LEN;
+        session.securityAuthKeyLen = USM_AUTH_KU_LEN;
+       
+        session.securityPrivProto = usmDESPrivProtocol;
+        session.securityPrivProtoLen = USM_PRIV_PROTO_DES_LEN;
+        session.securityPrivKeyLen = USM_PRIV_KU_LEN;
+
+
+        if (generate_Ku(session.securityAuthProto,
+             session.securityAuthProtoLen,
+             (u_char *) auth_v3_passphrase, strlen(auth_v3_passphrase),
+             session.securityAuthKey,
+             &session.securityAuthKeyLen) != SNMPERR_SUCCESS)
+        {  
+           snmp_log(LOG_ERR,
+                 "Error generating Ku from authentication pass phrase. \n");
+           exit(1);
+        }  
+
+        if (generate_Ku(session.securityAuthProto,
+             session.securityAuthProtoLen,
+             (u_char *) priv_v3_passphrase, strlen(priv_v3_passphrase),
+             session.securityPrivKey,
+             &session.securityPrivKeyLen) != SNMPERR_SUCCESS)
+        {
+           snmp_log(LOG_ERR,"Error generating Ku from authentication pass phrase. \n");
+           exit(1);
+        }
 
         session.callback = async_response;
         session.callback_magic = h;
@@ -93,7 +144,8 @@ void Manager::asyn_send()
         }
         else
         {
-            cout<<"snmp_send error!"<<endl;
+            //cout<<"snmp_send error!"<<endl;
+            snmp_perror("snmp_send");
             snmp_free_pdu(pdu);
         }
     }
@@ -103,26 +155,23 @@ void Manager::wait_request()
 {
     while(m_sendCount>0)
     {
-        int fds=0, block=1;
-        fd_set fdset;
-        struct timeval timeout;
-        FD_ZERO(&fdset);
-        snmp_select_info(&fds, &fdset, &timeout, &block);
-        fds = select(fds, &fdset, nullptr, nullptr, block?NULL:&timeout);
-        if(fds<0)
-        {
-            cout<<"select failed"<<endl;
-            exit(1);
-        }
-        if(fds)
-        {
-            snmp_read(&fdset);
-        }
-        else
-        {
-            snmp_timeout();
-        }
-    }
+
+       int fds = 0, block = 1;
+       fd_set fdset;
+       struct timeval timeout;
+
+       FD_ZERO(&fdset);
+       snmp_select_info(&fds, &fdset, &timeout, &block);
+       fds = select(fds, &fdset, NULL, NULL, block ? NULL : &timeout);
+       if (fds < 0) {
+          perror("select failed");
+          exit(1);
+       }
+       if (fds)
+           snmp_read(&fdset);
+       else
+           snmp_timeout();
+   }
 }
 
 
@@ -149,7 +198,7 @@ void Manager::stop()
     
 }
 
-void Manager::set_func(std::function<bool(Host, snmp_pdu*)> f)
+void Manager::set_func(std::function<bool(int, Host, snmp_pdu*)> f)
 {
     m_handleFunc = f;
 }

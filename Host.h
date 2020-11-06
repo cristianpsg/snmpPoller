@@ -7,7 +7,6 @@ struct cc_oid{
     size_t  length; 
 };
 
-//封装查询主机信息
 class Host{
 public:
     std::string             hostName;       //NICKNAME

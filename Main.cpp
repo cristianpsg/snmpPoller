@@ -4,27 +4,28 @@
 using namespace std;
 
 const char* hosts[2]={
-    "localhost",
-    "127.0.0.2"
+    "127.0.0.2",
+    "127.0.0.1"
 };
 
 const char* oids[4]={
-    ".1.3.6.1.2.1.1.1.0", 
+    ".1.3.6.1.2.1.1.1.0",
     ".1.3.6.1.2.1.1.3.0",
     ".1.3.6.1.2.1.1.4.0",
-    ".1.3.6.1.2.1.1.7.0"
+    ".1.3.6.1.2.1.1.5.0"
 };
 
 void print_result(int status, struct snmp_session* sp, struct snmp_pdu* pdu);
 
-bool test(Host h, snmp_pdu* p)
+bool test(int status, Host h, snmp_pdu* p)
 {
     //cout<<" test called"<<endl;
-    print_result(STAT_SUCCESS, h.pSession, p);
+    print_result(status, h.pSession, p);
 }
 
 void print_result(int status, struct snmp_session* sp, struct snmp_pdu* pdu)
 {
+    /*
     struct variable_list *vp;
     vp = pdu->variables;
 
@@ -40,6 +41,49 @@ void print_result(int status, struct snmp_session* sp, struct snmp_pdu* pdu)
         fprintf(stdout, "%s : %s\n", sp->peername, buf);
         vp = vp->next_variable;
     }
+    */
+
+  char buf[1024];
+  struct variable_list *vp;
+  int ix;
+  struct timeval now;
+  struct timezone tz;
+  struct tm *tm;
+
+  //gettimeofday(&now, &tz);
+  //tm = localtime(&now.tv_sec);
+  //fprintf(stdout, "%.2d:%.2d:%.2d.%.6d ", tm->tm_hour, tm->tm_min, tm->tm_sec,now.tv_usec);
+  
+  switch (status) 
+  {
+     case STAT_SUCCESS:
+                        vp = pdu->variables;
+                        if (pdu->errstat == SNMP_ERR_NOERROR) 
+                        {
+                           while (vp) 
+                           {
+                              snprint_variable(buf, sizeof(buf), vp->name, vp->name_length, vp);
+                              fprintf(stdout, "%s: %s\n", sp->peername, buf);
+	                      vp = vp->next_variable;
+                           }
+                        }      
+                        else 
+                        {
+                           for (ix = 1; vp && ix != pdu->errindex; vp = vp->next_variable, ix++);
+                           if (vp) 
+                              snprint_objid(buf, sizeof(buf), vp->name, vp->name_length);
+                           else 
+                              strcpy(buf, "(none)");
+      
+                           fprintf(stdout, "%s: %s: %s\n",sp->peername, buf, snmp_errstring(pdu->errstat));
+                        } 
+                        break;
+     case STAT_TIMEOUT:
+                        fprintf(stdout, "%s: Timeout\n", sp->peername);
+                        break;
+     case STAT_ERROR:
+                        snmp_perror(sp->peername);
+  }
 }
 
 int main()
